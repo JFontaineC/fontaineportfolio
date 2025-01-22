@@ -1,0 +1,467 @@
+---
+title: "Final Project: Analysis of US Government Broadband Investment by State"
+author: '49671080'
+date: "2024-12-15"
+output: html_document
+---
+
+```{css, echo=FALSE}
+body {
+  line-height: 2; /* Double line spacing */
+  font-family: "Times New Roman"; font-size: 12pt; }
+}
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE) #message and warning to not be included in knit
+rm(list = ls())
+```
+
+```{r include=FALSE}
+library(readr)
+library(readxl)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(ggthemes)
+library(gt)
+library(gtExtras)
+library(scales)
+library(gridExtra)
+library(lubridate)
+library(tidycensus)
+library(maps)
+library(mapdata)
+library(viridis)
+library(usmap) 
+library(plotly)
+library(grid)
+library(gridExtra)
+library(RColorBrewer)
+```
+
+```{r include=FALSE}
+#1. Government Data
+##1. Loading the Data
+biden_summary <- read_excel("D:/Penn/Introduction to Data Science/Assignments/Final Project/raw data/Invest.gov_PublicInvestments_Map_Data_CURRENT.xlsx", 
+    sheet = "FundingSummary", 
+    col_types = c("numeric", 
+        "text", "text", "text", "text", "text", 
+        "text", "text", "text", "text", "text", 
+        "numeric", "text", "text", "text", "text"))
+```
+
+```{r include=FALSE}
+##1.2 Data Cleaning
+#renaming the column
+col_names<-str_replace_all(str_to_lower(names(biden_summary))," ", "_")
+col_names[11]<-"funding_amount"
+names(biden_summary) <- col_names
+
+#correcting the data type
+biden_summary <- biden_summary%>%
+  mutate(funding_amount = ifelse(funding_amount == "TBD", NA, funding_amount),
+         funding_amount = as.numeric(funding_amount),
+         loan_amount = as.numeric(loan_amount))
+```
+
+```{r include=FALSE}
+##1.3 Broadband Investment Plan
+#collecting the broadband data only
+broadband_final <- biden_summary%>%
+  filter(category == "Broadband")%>%
+  mutate(funding_amount = replace_na(funding_amount, 0), 
+         loan_amount = replace_na(loan_amount, 0)) %>% 
+  group_by(state, agency_name)%>%
+  summarise(total_funding = sum(funding_amount+loan_amount))%>%
+  arrange(state)
+
+#pivot the table to wide
+broadband_final <- broadband_final%>%
+  pivot_wider(names_from = agency_name, values_from = total_funding)%>%
+  mutate(total_funding = replace_na(`Department of Agriculture`, 0) + 
+           replace_na(`Department of Commerce`, 0) + 
+           replace_na(`Federal Communications Commission`, 0) + 
+           replace_na(`Denali Commission`, 0))%>%
+  select(state,total_funding,everything())%>%
+  arrange(desc(total_funding))
+
+#renaming the columns
+names(broadband_final) <- c("state", "total_funding", "doa_rural", "doc", "fcc", "denali_commission")
+broadband_final
+```
+
+
+
+```{r include=FALSE}
+#2. Supporting Data
+##2.1 Loading the data
+state_pop <- read_excel("D:/Penn/Introduction to Data Science/Assignments/Final Project/raw data/NST-EST2023-POP.xlsx", 
+    sheet = "Sheet1")
+
+state_area <- read_csv("D:/Penn/Introduction to Data Science/Assignments/Final Project/raw data/us-states-by-area.csv")
+
+agriculture <- read_excel("D:/Penn/Introduction to Data Science/Assignments/Final Project/raw data/FI_Rank.xlsx", 
+    sheet = "Value of agricultural sector pr")
+
+avg_internet_speed <- read_csv("D:/Penn/Introduction to Data Science/Assignments/Final Project/raw data/average-internet-speed-by-state-2024.csv")
+
+overall_gdp <- stgdppi2q24_2_ <- read_excel("D:/Penn/Introduction to Data Science/Assignments/Final Project/raw data/stgdppi2q24.xlsx", 
+    sheet = "Table 1", skip = 5)
+```
+
+```{r include=FALSE}
+##2.2 Data Cleaning
+#population
+state_pop <- state_pop%>%
+  mutate(state = str_remove(state, "^\\."))%>%
+  select(state, `2023`)
+names(state_pop) <- c("state", "pop_2023")
+
+#area
+names(state_area)<-c("state", "total_area", "land", "water", "density_mi2")
+state_area <- state_area%>%
+  select(state,total_area,density_mi2)
+
+#agriculture
+col_names<-str_replace_all(str_to_lower(names(agriculture))," ", "_")
+names(agriculture) <- col_names
+agriculture_edit <- agriculture%>%
+  select(state, value_of_agricultural_sector_production, share_of_u.s._value_of_agricultural_sector_production)
+names(agriculture_edit) <- c("state", "agriculture_gdp", "agriculture_share")
+
+#average internet speed
+names(avg_internet_speed) <- c("state", "avg_speed_mbps")
+
+#overall gdp
+overall_gdp <- overall_gdp%>%
+  select(1,3)
+names(overall_gdp) <- c("state", "2023_gdp")
+```
+
+
+
+```{r include=FALSE}
+#3. Final Data
+##3.1 Final Numerical Data
+#data is in percapita
+final_df <- broadband_final%>%
+  left_join(y=state_pop, by="state")%>%
+  left_join(y=state_area, by="state")%>%
+  left_join(y=agriculture_edit, by="state")%>%
+  left_join(y=avg_internet_speed, by="state")%>%
+  left_join(y=overall_gdp, by="state")%>%
+  mutate(total_funding = total_funding/pop_2023,
+         doa_rural = doa_rural/pop_2023,
+         doc = doc/pop_2023,
+         fcc = fcc/pop_2023,
+         denali_commission = denali_commission/pop_2023,
+         agriculture_gdp = agriculture_gdp*1000/pop_2023,
+         `2023_gdp` = `2023_gdp`*1000000/pop_2023)
+```
+
+```{r include=FALSE}
+##3.2 Final Numerical Data (lower 48)
+final_df_lower48 <- final_df%>%
+  filter(state!="Alaska" & state!="Hawaii")%>%
+  arrange(state)
+```
+
+```{r include=FALSE}
+##3.3 Final Map Data
+#getting the US map including Alaska and Hawaii
+state_map <- us_map("states")
+
+#the final map data
+final_map <- state_map%>%
+  left_join(final_df,by=c("full" = "state"))
+```
+
+```{r include=FALSE}
+##3.4 Final Map Data (lower 48)
+final_map_lower48 <- state_map%>%
+  filter(full!="Alaska" & full!="Hawaii")%>%
+  left_join(final_df, by=c("full" = "state"))
+```
+
+# 1. Overall Data
+
+In the past decades, broadband/internet has been a primary necessity for all of us. Heightened by the pandemic, the use of electronic devices has been irreplaceable in our day to day lives. Even after the COVID-19 Pandemic, we can still see the new culture that has been adapted, for instance work from home. Online economic activities increased for 9.8% in 2021, accounting for $3.7 Trillion of GDP (Highfill & Surfield, 2023).  This shows the new and emerging progress of the digital economy in the US.
+
+From the White House website, whitehouse.gov, we can see the original investment plan of President Joe Biden and Vice President Kamala Harris campaign for 2024 onward, had they been elected again for the second presidential term. In the data provided in this website, President Biden had made broadband as the second highest investment for 2025, only below highway infrastructure investment (The White House, 2024). With the increasing demand for better broadband infrastructure, in the hope that the internet speed will increase and become more stable, this study ought to see whether economy level through GDP and average internet/broadband speed will be a strong factor in determining broadband investment in the state level.
+
+In the data, there are four agencies that have projects in regards to broadband investment. They are the Federal Communication Commission (FCC), Department of Commerce (DOC), Department of Agriculture (DOA), and Denali Commission. FCC, surprisingly, with a budget of more than \$14 Billion, is only second in total investment share (about 23%). The highest budget holder is DOC, through the National Telecommunication and Information Administration, with \$44 Billion which accounts for more than 73% of the total broadband investment budget. With a little over 30% of the total budget, DOA through Rural Utilities Services received a funding amount of \$1.8 Billion making it the third highest receiver. 
+
+The fourth department is the  Denali Commission, formed to provide critical utilities, infrastructure, and economic support for Alaska (Denali Commission – Building Alaska, 2023). With a budget of \$250,000 they only account for only 0.00041% of the total broadband investment budget. Understandably, with the challenging terrain and transportation for the logistics, Alaska will need more funding per capita as it will be shown in the graph below.
+
+```{r echo=FALSE}
+#rural (without alaska and hawaii)
+rural_g <- ggplot(final_map_lower48) +
+  geom_sf(aes(fill = doa_rural)) +
+  scale_fill_viridis_c(option = "magma") +
+  labs(title = "DOA-Rural Broadband Funding",
+       subtitle = "Per Capita",
+       fill = "Funding Amount") +
+  theme_void()+
+  theme(plot.title = element_text(hjust=0, face="bold"),
+        plot.subtitle = element_text(hjust=0.5))
+
+#doc
+doc_g<-ggplot(final_map_lower48) +
+  geom_sf(aes(fill = doc)) +
+  scale_fill_viridis_c(option = "magma") +
+  labs(title = "DOC Broadband Funding",
+       subtitle = "Per Capita",
+       fill = "Funding Amount") +
+  theme_void()+
+  theme(plot.title = element_text(hjust=0.5, face="bold"),
+        plot.subtitle = element_text(hjust=0.5))
+
+##making the proportion graph
+#top 10 funded
+top10_funded <- final_df%>%
+  select(state,total_funding,doa_rural,doc,fcc)%>%
+  arrange(desc(total_funding))%>%
+  head(10)
+
+#pivot longer
+top10_funded_long <- top10_funded%>%
+  pivot_longer(cols = c(doa_rural,doc,fcc),
+               names_to = "funding_type",
+               values_to = "funding_amount")
+
+#Funding Proportion
+top10_prop<-top10_funded_long%>%
+  ggplot()+
+  geom_bar(stat="identity", aes(x=reorder(state,-total_funding),
+                                y=funding_amount, fill=funding_type))+
+  labs(title="10 Highest Funded State",
+       subtitle = "Per Capita",
+       fill="Funding Agency",
+       x="",
+       y="")+
+  scale_y_continuous(labels = dollar_format(prefix = "$"))+
+  scale_fill_manual(
+    values = c("doa_rural" = "#66B2FF", "doc" = "#FFA500", "fcc" = "#77DD77"), 
+    labels = c("doa_rural" = "Department of Agriculture - Rural", 
+               "doc" = "Department of Commerce", 
+               "fcc" = "Federal Communications Commission"))+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust=0.5, face="bold"),
+        plot.subtitle = element_text(hjust=0.5))
+
+#Define layout matrix 
+layout <- rbind(c(1, 2), c(3, 3))
+grid.arrange(rural_g, doc_g, top10_prop,ncol=2, layout_matrix=layout)
+```
+
+Let's dive into the graph deeper. The bar chart gives us some insight on the top 10 highest funded states per capita. Alaska, with over $2000 per capita investment budget, is the state with the highest funding. As this would be the trend throughout the data, if not removed, this study will regard Alaska and Hawaii as an outlier to make better inferences about the overall data.
+
+The DOA, represented by the Rural Broadband Funding graph, is focused on improving the agricultural state that is still in need for better, perhaps fast, internet. The states highlighted in grey have not received any funding investment plans and are marked as “TBD” (To Be Determined) in the data regarding future funding. The two most apparent highest funded states are New Mexico and Oklahoma. Just by intuition we would suspect that there might be some funding amount from the DOA and with the agricultural aspect of the two states. Oklahoma, known for its cattle and calves production, accounts for \$4.5 Billion (Koukol, 2013). For New Mexico, its agriculture production accounts for \$3.7 Billion in 2022 (Cruces, 2024). Both states align with the stereotype of predominantly rural areas. Based on this intuition, the study also aims to investigate whether there is a negative relationship between average internet speed and DOA funding amounts in these states. The hypothesis is that states facing greater rural challenges and possessing significant potential receive higher funding amounts.
+
+The DOC, through the National Telecommunication and Information Administration, is the highest funded department out of the 4 departments. West Virginia, Montana, and Wyoming are among the highest funded states by the DOC, excluding Alaska. Interestingly New Mexico also received a relatively big amount from the DOC. As we can see from the bar chart, just by looking into through the DOC will account for almost all of the broadband funding for a state. This indicates that the government views broadband as a part of investment for a better economy. Similar to the DOA data, this study is interested in the relationship between average internet speed and overall GDP per capita of a state in regards to the broadband investment plan. Intuitively, we might suggest that states with higher investment budgets are the ones that needed the most support, the state with low average speed and GDP will receive higher funding. This hypothesis will be further tested in the following section.
+
+A little disclaimer about the graph, it shows per capita data to better give insights into how much does the government spend that is not due to population. As more people use more broadband, investment for a state with a higher population will inflate the number high. To neutralize this effect, this study uses  per capita data based on the 2023 population from the US Census. The Denali Commission is also not shown in the bar chart as it would only appear in Alaska's bar. As Alaska and Hawaii are not our main focus of this study, we wanted to give a better insight of the other 48 US States.
+
+
+
+# 2. Linear Regression
+
+This section is trying to focus on refuting or confirming the initial hypothesis in the previous section. It must be noted that the data is purely correlational and not causational. The primary method used for the study to see the relationship between variables is linear regression. To better visualize and find a linear relationship between variables, agriculture GDP and overall GDP are transformed with natural logarithm function as a way to minimize outliers. The outliers of the data, for example New Mexico and Oklahoma in the DOA data, are very important and therefore won’t be removed from the analysis. Another thing to note is that all of the funding and GDP data used are in per capita, which is the same with the previous section and for the same reason.
+
+```{r echo=FALSE}
+# doa_rural
+g1 <- final_df_lower48%>%
+  ggplot(aes(x = log(agriculture_gdp), y = doa_rural)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "blue") +
+  labs(title = "Funding and GDP Analysis",
+       subtitle = "All types of funding and GDP is in per capita",
+       y = "DOA Funding",
+       x = "log(Agriculture GDP)")+
+  scale_x_continuous(labels = dollar_format(prefix = "$")) +
+  scale_y_continuous(labels = dollar_format(prefix = "$")) +
+  annotate("text", 
+           x = 6.5, y = 90, 
+           label = "Y = -3.937 + 1.980 X", 
+           color = "black", size = 3) +
+  annotate("text", 
+           x = 6.5, y = 70, 
+           label = "slope's p-value = 0.622", 
+           color = "black", size = 3) +
+  theme_minimal()+
+  theme(plot.title = element_text(hjust= 0,face = "bold"))
+
+g2 <- final_df_lower48%>%
+  ggplot(aes(x = avg_speed_mbps, y = doa_rural)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "blue") +
+  labs(title = "",
+       subtitle ="",
+       y = "DOA Funding",
+       x = "Average Speed (Mbps)")+
+  scale_y_continuous(labels = dollar_format(prefix = "$")) +
+  annotate("text", 
+           x = 200, y = 80, 
+           label = "Y = 15.375 - 0.01322 X", 
+           color = "black", size = 3) +
+  annotate("text", 
+           x = 200, y = 55, 
+           label = "slope's p-value = 0.778", 
+           color = "black", size = 3) +
+  theme_minimal()
+
+# doc
+g3 <-final_df_lower48%>%
+  ggplot(aes(x = log(`2023_gdp`), y = doc)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "blue") +
+  labs(y = "DOC Funding",
+       x = "log(GDP)")+
+  scale_x_continuous(labels = dollar_format(prefix = "$")) +
+  scale_y_continuous(labels = dollar_format(prefix = "$")) +
+  annotate("text", 
+           x =12, y = 520, 
+           label = "Y = 2860.34 - 236.5 X", 
+           color = "black", size = 3) +
+  annotate("text", 
+           x = 12, y = 420, 
+           label = "slope's p-value = 0.006", 
+           color = "black", size = 3) +
+  theme_minimal()
+
+g4 <- final_df_lower48%>%
+  ggplot(aes(x = avg_speed_mbps, y = doc)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "blue") +
+  labs(y = "DOC Funding",
+       x = "Average Speed (Mbps)")+
+  scale_y_continuous(labels = dollar_format(prefix = "$")) + 
+  annotate("text", 
+           x = 390, y = 550, 
+           label = "Y = 441.2550 - 0.7534 X", 
+           color = "black", size = 3) +
+  annotate("text", 
+           x = 390, y = 450, 
+           label = "slope's p-value = 0.000683", 
+           color = "black", size = 3) +
+  theme_minimal()
+
+# average_speed
+g5 <- final_df_lower48%>%
+  ggplot(aes(x = avg_speed_mbps, y = log(agriculture_gdp))) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "blue") +
+  labs(y = "log(Agriculture GDP)",
+       x = "Average Speed (Mbps)")+
+  scale_y_continuous(labels = dollar_format(prefix = "$")) +
+  annotate("text", 
+           x =200, y = 5.75, 
+           label = "Y = 9.607 - 0.007 X", 
+           color = "black", size = 3) +
+  annotate("text", 
+           x = 200, y = 5, 
+           label = "slope's p-value = 0.000109", 
+           color = "black", size = 3) +
+  theme_minimal()
+
+g6 <- final_df_lower48%>%
+  ggplot(aes(x = avg_speed_mbps, y = log(`2023_gdp`))) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "blue") +
+  labs(y = "log(GDP)",
+       x = "Average Speed (Mbps)")+
+  scale_y_continuous(labels = dollar_format(prefix = "$")) +
+  annotate("text", 
+           x =200, y = 12.1, 
+           label = "Y =  10.98 + 0.000863 X", 
+           color = "black", size = 3) +
+  annotate("text", 
+           x =200, y = 11.9, 
+           label = "slope's p-value = 0.0214", 
+           color = "black", size = 3) +
+  theme_minimal()
+
+grid.arrange(g1, g2, g3, g4, g5, g6, ncol = 2) 
+```
+
+These graphs show the linear regression line of the assumed dependent variable (shown on the y axis) and the assumed independent variable (shown on the x axis). The blue line is the regression line and the dots are the individual data scatter plot. The gray area is the confidence interval for each point in the regression line. The GDP data is taken from the U.S. Department of Agriculture (USDA) and U.S. Department of Commerce through the Bureau of Economic Analysis (BEA) website, www.bea.gov. The average speed data is gathered from www.worldpopulationreview.com who got the data from www.wisevoter.com. It must be noted that the website itself doesn't specify how they gathered their internet speed or what type of internet (wireless or wired) they measure. 
+
+The first graph (top left) shows the relationship between DOA funding and the natural logarithm (or ln for short) of GDP from agriculture economic activities. As we can see, there still are some possible outliers of data in the plot even after the logarithm transformation, a trend that we can see in almost all of the six graphs. At first, we can see a weak positive relationship between DOA funding and ln of agriculture GDP. For this particular relationship, the p-value for a t-test for the slope has a score of 0.622. Deeming it is more likely than not that the slope of the graph is statistically insignificant. The correlation between DOA-Rural and agriculture GDP, -0.03921 is also quite low. This finding is an indication that DOA-Rural and agriculture GDP might not have as strong of relationship as we originally thought. The second graph (top right), shows another possible factor that might affect DOA funding, which is the average speed of a state. The original hypothesis for the DOA funding and broadband speed is negative as the more challenged a state is, they would need more funding. This relationship does seem to confirm this intuitive thought. From the linear regression we find that if a state has one more Mbps of average broadband speed, they would receive $0.4375 less per capita in DOA funding. The p-value for the t-test in this relationship is also quite high (0.0866) which is above the 5% significance level. Though it is almost somewhat significant. From this analysis, we can see that there might be a small relationship between DOA-Rural funding and broadband average speed of a state.
+
+The third graph (middle left) shows the relationship between DOC funding and the overall GDP of a state. We can see there is a huge slope for the linear regression line. An increase of \$1 of ln GDP per capita will result in \$236.5 less from the DOC funding. This relationship is also deemed to be significant with a p-value below 0.05, making it significant under the 5% significance level. Similarly, the fourth graph (middle right) is also deemed statistically significant through the linear regression model. A 1 Mbps increase in average broadband speed will result in \$0.7534 less of DOC funding per capita. From these two graphs, it seems that DOC funding possibly has a strong relationship with ln GDP level and average broadband speed of a test. However, as the data is correlational, it is hard to prove the any causation relationship between the dependent (DOC funding) and independent variable (ln GDP and average broadband speed)
+
+The fifth and sixth graph (bottom left and right) shows the relationship between GDP and average broadband speed. Looking at this relationship, there might be a strong relationship between the two variables. From the linear regression of  ln agriculture GDP and average speed, their slope seems to be statistically significant under the 5% significance level in which they have a negative relationship. Similarly, the ln overall GDP and the average speed seems to be statistically significant under the 5% significance level as it has a p-value of 0.0214 for a t-test, in which they have a positive relationship. This shows that we can somewhat expect a relationship between the two variables. These findings also showcase a confound that maybe the GDP and average speed might not have a direct effect on funding amount but rather they interact with each other or with other factors. This phenomena highlights the limitations of a correlational study. While the variables might have a statistically significant correlation, it might not be causation and hard to determine whether it is causation or purely correlation. Though, they do have a relationship between each other.
+
+
+
+# 3. Conclusion
+
+To conclude, DOA funding seems to have a weak if any with average speed (in Mbps) and ln of agriculture GDP in each state. However, DOC funding, which accounts for 72% in total funding, seems to have a strong relationship with average speed (in Mbps) and overall GDP in each state. Average speed does seem to have a relationship with GDP score, especially strong with the agriculture GDP (negative relationship) and weaker, though still statistically significant, relationship with overall GDP (positive relationship). This study provides the correlational relationship between possible causation variables in determining the amount of broadband funding in each state of the US. With limitations of correlational study, this study can’t prove the causational effect between variables, however some indications might be worth looking into for further research.
+
+
+
+# Appendix
+
+## Correlation Table
+```{r echo=FALSE}
+correlation_data <- final_df_lower48[,2:13]
+correlation_data2 <- correlation_data%>%select(-denali_commission)
+cor_matrix <- cor(correlation_data2, use = "complete.obs")
+cor_matrix
+```
+
+
+## Linear Regression Summary
+```{r echo=FALSE}
+#doa_rural
+summary(lm(doa_rural ~ log(agriculture_gdp), data = final_df_lower48))
+summary(lm(doa_rural ~ avg_speed_mbps, data = final_df_lower48))
+
+#doc
+summary(lm(doc ~ log(`2023_gdp`), data = final_df_lower48))
+summary(lm(doc ~ avg_speed_mbps, data = final_df_lower48))
+
+#avg_speed_mbps (as independent variable)
+summary(lm(log(agriculture_gdp) ~ avg_speed_mbps, data = final_df_lower48))
+summary(lm(log(`2023_gdp`) ~ avg_speed_mbps, data = final_df_lower48))
+```
+
+
+
+# References
+
+The White House. (2017). The White House. The White House; The White House. https://www.whitehouse.gov
+
+Denali Commission – Building Alaska. (2023). Denali.gov. https://www.denali.gov/ 
+
+What US states produce the most food? (Ranking 1-50). (2013, April 12). Farm Progress. https://www.farmprogress.com/management/what-us-states-produce-the-most-food-ranking-1-50-
+
+New Mexico ranks among top states for agriculture production. (2024). Nmsu.edu. https://nmdeptag.nmsu.edu/new-release/2024/latest-census-of-agriculture-data-now-available.html
+
+Highfill, T., & Surfield, C. (2022). New and Revised Statistics of the U.S. Digital Economy, 2005–2021. https://www.bea.gov/system/files/2022-11/new-and-revised-statistics-of-the-us-digital-economy-2005-2021.pdf
+
+United States by Area 2021. (n.d.). Worldpopulationreview.com. https://worldpopulationreview.com/state-rankings/states-by-area 
+
+Bureau, U. C. (2023, March 23). State Population Totals and Components of Change: 2020-2021. Census.gov. https://www.census.gov/data/tables/time-series/demo/popest/2020s-state-total.html 
+
+Farm finance indicators State ranking. (n.d.). Data.ers.usda.gov. https://data.ers.usda.gov/reports.aspx?ID=17839
+
+Bureau of Economic Analysis. (2024). GDP by State | U.S. Bureau of Economic Analysis (BEA). Bea.gov. https://www.bea.gov/data/gdp/gdp-state 
+
+United States by Area 2021. (n.d.). Worldpopulationreview.com. https://worldpopulationreview.com/state-rankings/states-by-area 
+
+Average Internet Speed by State 2023 - Wisevoter. (2023, June 9). Wisevoter. https://wisevoter.com/state-rankings/average-internet-speed-by-state/ 
+
+United States by Area 2021. (n.d.). Worldpopulationreview.com. https://worldpopulationreview.com/state-rankings/states-by-area 
+
+
+
+# 3 Skills I Used in This Project
+
+For this project, I use the data cleansing skills taught in class. To be exact, selecting columns, renaming column names, filtering data, and manipulating data shapes. This can be seen in the data cleansing process and when I’m trying to make the total funding proportion for each state by each government agency (the first graph).
+
+I also use the skills to make graphs and tables. Data gathered from the internet or shapefiles from R library are used to make the graphs and tables. I learned how to clearly show my arguments through the graphs and how to manipulate the graphs details, such as title, axis title, axis symbol, etc, so it can aid the reader to gauge information easily from the graphs even without the explanation paragraph.
+
+Lastly, I also used the linear regression analysis taught in class. As this is a correlational study, the linear regression also represents the correlation between variables. However, through linear regression I can gauge whether the relationship between the variables are significant or insignificant.
